@@ -48,7 +48,7 @@ puppeteer.use(StealthPlugin());
                     if (!match) return null;
 
                     const hours = parseInt(match[1]);
-                    if (hours >= 1) return null;
+                    if (hours >= 10) return null;
 
                     const link = el.querySelector("a.btn-default")?.href;
                     const id = link?.match(/Listing\/Details\/(\d+)/)?.[1];
