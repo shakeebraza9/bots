@@ -4,7 +4,7 @@ from DataFields import DataFields
 from datetime import datetime
 
 base_dir = r"D:\scraper"
-output_dir = r"D:\bots\python\final_csvs"
+output_dir = r"D:\python\final_csvs"
 os.makedirs(output_dir, exist_ok=True)
 
 for root, dirs, files in os.walk(base_dir):

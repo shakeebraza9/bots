@@ -12,13 +12,30 @@ def VehicleType(mapping: dict, value: str):
     key = str(value).lower()
     return mapping.get(key,"Car")
 
+def FuleType(mapping,value):
+    if not mapping or not value:
+        return value  
+    key = str(value).lower()
+    return mapping.get(key, value) 
+    
+def TransmissionType(mapping,value):
+    if not mapping or not value:
+        return value  
+    key = str(value).lower()
+    return mapping.get(key, value)     
 
+def SetMake(mapping,value):
+    if not mapping or not value:
+        return value  
+    key = str(value).lower()
+    return mapping.get(key, value)     
+    
 def DataFields(dataset, data: dict):
 
     return {
        
         'title': data.get('title'),
-        'make_id': data.get("make_id"),
+        'make_id': SetMake(dataset.get('Make'),data.get("make_id")),
         'model_id': data.get("model_id"),
         'variant_id': data.get("variant_id"),
         'body_id':Bodydtype(dataset.get("Body Type"),data.get("body_id")) ,
@@ -32,8 +49,10 @@ def DataFields(dataset, data: dict):
         # Vehicle Specs
         'doors': data.get('doors'),
         'seats':data.get('seats'),
-        'fuel_type': data.get('fuel_type'),
-        'transmission': data.get('transmission'),
+        'fuel_type': FuleType(dataset.get("Fuel Type"),data.get('fuel_type')),
+        'fuel_details': data.get('fuel_type'),
+        'transmission': TransmissionType(dataset.get("Transmission Type"),data.get('transmission')),
+        'transmission_details': data.get('transmission'),
         'cc': data.get('cc'),
         'keys': data.get('keys'),
         'engine_runs': data.get('engine_runs'),

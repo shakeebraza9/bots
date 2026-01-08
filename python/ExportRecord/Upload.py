@@ -1,4 +1,4 @@
-import os
+import os,re
 import csv
 import json
 import time
@@ -7,13 +7,14 @@ import urllib3
 from datetime import datetime
 from dotenv import load_dotenv
 import ExportRecord.function as Fun
-from ExportRecord.dataset import DataSet 
+from ExportRecord.ConnectSheet import DataSet 
 
 API_BASE_URL = os.getenv("API_BASE_URL")
 LOGIN_EMAIL = os.getenv("LOGIN_EMAIL")
 LOGIN_PASSWORD = os.getenv("LOGIN_PASSWORD")
 LOG_FILE = "auction_error.log"
 API_ENDPOINT = f"{API_BASE_URL}/api/cruds/auctions"
+API_ENDPOINT_PLATEFROM = f"{API_BASE_URL}/api/cruds/platform"
 ERROR_LOG_FILE = "error_log.txt"
 class Upload:
     
@@ -33,6 +34,51 @@ class Upload:
 
             f.write("\n\n")
 
+    def normalize(text):
+        text = text.lower()
+        text = re.sub(r"(auction|auctions|car|cars)", "", text)
+        return text.strip()
+
+
+    def getPlatefromID(auction_house, LoginToken):
+        if not auction_house:
+            return None
+        ALIASES = {
+            "protruck": ["protruck", "protruck auction"],
+            "cca": ["central car auction", "central car auctions", "cca"],
+            "bca": ["bca", "british car auctions"],
+            "manheim": ["manheim", "manheim auction"],
+            "aston barclay": ["aston barclay", "aston barclay auctions"],
+        }
+
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {LoginToken}"
+        }
+
+        response = requests.get(
+            API_ENDPOINT_PLATEFROM,
+            headers=headers,
+            verify=False,
+            timeout=30
+        )
+
+        response.raise_for_status()
+        data = response.json().get("data", [])
+
+        auction_norm = Upload.normalize(auction_house)
+
+        for item in data:
+            item_norm = Upload.normalize(item["name"])
+            for key, names in ALIASES.items():
+                if auction_norm in names and key in item_norm:
+                    return item["id"]
+            if auction_norm in item_norm or item_norm in auction_norm:
+                return item["id"]
+
+        return None
+    
     def process_csvs_to_json(folder_path, dataset: DataSet):
         result = []
 
@@ -60,7 +106,7 @@ class Upload:
                 "id": sheet_id,
                 "name": center_name,
                 "auction_date": auction_date,
-                "platform_id": 1,
+                "platform": auction_house,
                 "auction_type": 2,
                 "status": "draft",
                 "payload": json.dumps(rows, ensure_ascii=False)
