@@ -1,4 +1,4 @@
-import json, time, sys, os
+import json, time, sys, os,re,requests,urllib3
 from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -7,10 +7,19 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
-import gspread
 from google.oauth2.service_account import Credentials
+from dotenv import load_dotenv
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ===================== SCRAPER =====================
+load_dotenv()
+API_BASE_URL = os.getenv("API_BASE_URL")
+LOGIN_EMAIL = os.getenv("LOGIN_EMAIL")
+LOGIN_PASSWORD = os.getenv("LOGIN_PASSWORD")
+API_ENDPOINT_PLATEFROM = f"{API_BASE_URL}/api/cruds/platform"
+AUCTION_UPLOAD_URL = f"{API_BASE_URL}/api/cruds/taskManagement"
+
+
+
 def scrape(date, path, headless=False):
     base_path = os.path.dirname(os.path.abspath(__file__))
 
@@ -95,53 +104,86 @@ def scrape(date, path, headless=False):
     return json_path
 
 
-# ===================== GOOGLE SHEETS UPLOAD =====================
-def upload_to_google_sheets(json_file, sheet_id):
-    base_path = os.path.dirname(os.path.abspath(__file__))
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
 
-    creds_path = os.path.join(base_path, "bcacouk-6f0e8afe257b.json")
-    if not os.path.exists(creds_path):
-        print("❌ Google credentials file not found!")
-        return
-
-    creds = Credentials.from_service_account_file(creds_path, scopes=scopes)
-    client = gspread.authorize(creds)
+   
+def login_and_get_token():
+    url = f"{API_BASE_URL}/api/auth/login"
+    payload = {
+        "email": LOGIN_EMAIL,
+        "password": LOGIN_PASSWORD
+    }
 
     try:
-        sheet = client.open_by_key(sheet_id).sheet1
-        print("✅ Connected to Google Sheet successfully!")
+        r = requests.post(url, json=payload, verify=False, timeout=30)
+        r.raise_for_status()
+        token = r.json().get("data").get("token")
+
+        if not token:
+            raise Exception("Token missing in response")
+
+        print("✅ Login successful")
+        return token
+
     except Exception as e:
-        print("❌ Failed to open Google Sheet:", e)
-        return
+        print("❌ Login failed:", e)
+        exit()
 
-    with open(json_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
 
-    for sale in data:
-        sale_name = sale.get("Sale Name", "")
-        sale_date_raw = sale.get("Sale Date", "")
-        lots = sale.get("Lots Available", "")
+    
+def get_bca_id(token):
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json"
+    }
+
+    try:
+        r = requests.get(API_ENDPOINT_PLATEFROM, headers=headers, verify=False, timeout=30)
+        r.raise_for_status()
+        platforms = r.json().get("data", [])
+        
+        for platform in platforms:
+            if platform.get("name") == "BCA":
+                return platform.get("id")
+        
+        return None  
+    except requests.RequestException as e:
+        print("Error fetching platforms:", e)
+        return None
+
+
+
+def upload_auctiondata_one_by_one(token ,payload):
+ 
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    try:
+        r = requests.post(
+            AUCTION_UPLOAD_URL,
+            json=payload,
+            headers=headers,
+            verify=False,
+            timeout=60
+        )
+
+        print("Status:", r.status_code)
 
         try:
-            dt = datetime.fromisoformat(sale_date_raw.replace("Z", "+00:00"))
-            sale_date = dt.strftime("%d/%m/%Y")
-            sale_time = dt.strftime("%H:%M:%S")
+            print("Response:", r.json())
         except Exception:
-            sale_date, sale_time = sale_date_raw, ""
+            print("Response text:", r.text)
 
-        sheet.append_row([
-            "", "", "BCA",
-            sale_name,
-            sale_date,
-            sale_time,
-            "", lots, "", "", "", "", "", ""
-        ])
+    except Exception as e:
+        print("❌ Failed:", e)
 
-    print(f"✅ Uploaded {len(data)} records to Google Sheets!")
-
-
-# ===================== MAIN EXECUTION =====================
+    time.sleep(1)  
+    
+    
+    
+    
 if __name__ == "__main__":
     base_path = os.path.dirname(os.path.abspath(__file__))
 
@@ -152,12 +194,31 @@ if __name__ == "__main__":
     date_arg = sys.argv[1]
     path = "https://login.bca.co.uk/login?signin=1c9b20ed25a32746f9d5d14b3bb2334a"
 
-    # ✅ Google Sheet Details
-    sheet_id = "1SigyZCALbmwjFkMv_LKk4q2ku2ej1Z6-J_n5QBX7qEs"
-    sheet_url = "https://docs.google.com/spreadsheets/d/1SigyZCALbmwjFkMv_LKk4q2ku2ej1Z6-J_n5QBX7qEs/edit?gid=1586578187#gid=1586578187"
 
-    # ✅ Run scraper
     json_path = scrape(date_arg, path)
-    if json_path:
-        upload_to_google_sheets(json_path, sheet_id)
-        print("✅ Task completed successfully!")
+
+    Token = login_and_get_token()
+    if Token:
+        plateformId = get_bca_id(Token)
+        with open("BCA_Auctions.json", "r", encoding="utf-8") as f:
+            auctions = json.load(f)
+
+        for i, item in enumerate(auctions, start=1):
+            iso_date = item.get("Sale Date") 
+            dt = datetime.strptime(iso_date, "%Y-%m-%dT%H:%M:%SZ")
+            formatted_date = dt.strftime("%Y-%m-%d %H:%M:%S")
+            payload = {
+                "auction_type": 2,
+                "platform": plateformId,
+                "auction_name": item.get("Sale Name"),
+                "date": formatted_date,
+                "lots": str(item.get("Lots Available")),
+                "assign_to": "Shakeeb",
+                "status":"Pending"  
+            }
+            res = upload_auctiondata_one_by_one(Token,payload)
+            
+
+
+
+

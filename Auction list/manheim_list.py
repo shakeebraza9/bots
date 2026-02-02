@@ -8,11 +8,26 @@ from google.oauth2.service_account import Credentials
 import gspread
 import time, json, os, sys,re
 from datetime import datetime
+from pathlib import Path
+from dotenv import load_dotenv
+import re,urllib3,requests
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ===================== BASE PATH =====================
+
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FOLDER_NAME = "Manheim"
 FOLDER_PATH = os.path.join(BASE_DIR, FOLDER_NAME)
+
+
+load_dotenv()
+API_BASE_URL = os.getenv("API_BASE_URL")
+LOGIN_EMAIL = os.getenv("LOGIN_EMAIL")
+LOGIN_PASSWORD = os.getenv("LOGIN_PASSWORD")
+API_ENDPOINT_PLATEFROM = f"{API_BASE_URL}/api/cruds/platform"
+AUCTION_UPLOAD_URL = f"{API_BASE_URL}/api/cruds/taskManagement"
+
+
 os.makedirs(FOLDER_PATH, exist_ok=True)
 
 def scrape(url):
@@ -128,8 +143,7 @@ def normalize_auction_dates():
     print(f"✅ Normalized {len(fixed_data)} auctions in {input_file}")
     
     
-from datetime import datetime
-import os, json, re
+
 
 def filter_auction_by_iso_date(target_date_iso):
     input_file = os.path.join(FOLDER_PATH, "auctions.json")
@@ -212,60 +226,122 @@ def filter_auction_by_iso_date(target_date_iso):
     return filtered
 
 
-
-def upload_to_google_sheets(data, sheet_id):
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds_file = os.path.join(BASE_DIR, "bcacouk-6f0e8afe257b.json")
-
-    creds = Credentials.from_service_account_file(creds_file, scopes=scopes)
-    client = gspread.authorize(creds)
+def login_and_get_token():
+    url = f"{API_BASE_URL}/api/auth/login"
+    payload = {
+        "email": LOGIN_EMAIL,
+        "password": LOGIN_PASSWORD
+    }
 
     try:
-        sheet = client.open_by_key(sheet_id).sheet1
-        print("✅ Connected to Google Sheet successfully!")
-    except Exception as e:
-        print("❌ Failed to open Google Sheet:", e)
-        return
+        r = requests.post(url, json=payload, verify=False, timeout=30)
+        r.raise_for_status()
+        token = r.json().get("data").get("token")
 
-    for sale in data:
-        title = sale.get("Auction name", "")
-        date_raw = sale.get("Date", "")
-        sale_time = sale.get("Time", "")
-        lots = sale.get("Lots", "")
+        if not token:
+            raise Exception("Token missing in response")
+
+        print("✅ Login successful")
+        return token
+
+    except Exception as e:
+        print("❌ Login failed:", e)
+        exit()
+
+def get_id(token):
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json"
+    }
+
+    try:
+        r = requests.get(API_ENDPOINT_PLATEFROM, headers=headers, verify=False, timeout=30)
+        r.raise_for_status()
+        platforms = r.json().get("data", [])
+        
+        for platform in platforms:
+            if platform.get("name") == "Manheim Auction":
+                return platform.get("id")
+        
+        return None  
+    except requests.RequestException as e:
+        print("Error fetching platforms:", e)
+        return None
+
+def upload_auctiondata_one_by_one(token ,payload):
+ 
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    try:
+        r = requests.post(
+            AUCTION_UPLOAD_URL,
+            json=payload,
+            headers=headers,
+            verify=False,
+            timeout=60
+        )
+
+        print("Status:", r.status_code)
 
         try:
-            dt = datetime.strptime(date_raw, "%Y/%m/%d")
-            sale_date = dt.strftime("%d/%m/%Y")
+            print("Response:", r.json())
         except Exception:
-            sale_date = date_raw
+            print("Response text:", r.text)
 
-        sheet.append_row([
-            "", "", "Manheim",
-            title,
-            sale_date,
-            sale_time,
-            "",
-            lots,
-            "", "", "", "", "", ""
-        ])
+    except Exception as e:
+        print("❌ Failed:", e)
 
-    print(f"✅ Uploaded {len(data)} auctions to Google Sheet!")
+    time.sleep(1)  
+    
+ 
 
 
-# ===================== MAIN =====================
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("❌ Please provide a date argument! Example: python manheim.py 2025-11-02T00:00:00Z")
         sys.exit(1)
 
     selected_date = sys.argv[1]
-    print(selected_date)
+
 
     path = "https://www.manheim.co.uk/catalogues-and-events"
     scrape(path)
     normalize_auction_dates()
     filtered_data = filter_auction_by_iso_date(selected_date)
-    print(filtered_data)
+
     if filtered_data:
-        sheet_id = "1SigyZCALbmwjFkMv_LKk4q2ku2ej1Z6-J_n5QBX7qEs"
-        upload_to_google_sheets(filtered_data, sheet_id)
+        token = login_and_get_token()
+        if token:
+            platefromID = get_id(token)
+        
+            if platefromID:
+                base_path = os.path.dirname(os.path.abspath(__file__))
+                file_path = os.path.join(base_path, "Manheim", "finalList.json")
+                with open(file_path, "r", encoding="utf-8") as f:
+                        auctions = json.load(f)
+
+                for i, item in enumerate(auctions, start=1):
+                    date_str = item.get("Date", "").strip()    
+                    time_str = item.get("Time", "").strip()
+
+                    formatted_date = None
+                    if date_str and time_str:
+                        combined = f"{date_str} {time_str}"
+                        dt = datetime.strptime(combined, "%Y/%m/%d %H:%M")
+
+                        formatted_date = dt.strftime("%Y-%m-%d %H:%M:%S")
+
+                    payload = {
+                        "auction_type": 2,
+                        "platform": platefromID,
+                        "auction_name": item.get("Auction name"),
+                        "date": formatted_date,
+                        "lots": str(item.get("Lots")),
+                        "assign_to": "Shakeeb",
+                        "status":"Pending"  
+                    }
+                    res = upload_auctiondata_one_by_one(token,payload)

@@ -2,6 +2,7 @@ import json
 import sys
 import os
 import time
+import re,urllib3,requests
 from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver import ChromeOptions
@@ -10,11 +11,17 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
-from google.oauth2.service_account import Credentials
-import gspread
+from pathlib import Path
+from dotenv import load_dotenv
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+load_dotenv()
+API_BASE_URL = os.getenv("API_BASE_URL")
+LOGIN_EMAIL = os.getenv("LOGIN_EMAIL")
+LOGIN_PASSWORD = os.getenv("LOGIN_PASSWORD")
+API_ENDPOINT_PLATEFROM = f"{API_BASE_URL}/api/cruds/platform"
+AUCTION_UPLOAD_URL = f"{API_BASE_URL}/api/cruds/taskManagement"
 
 
-# ===================== SCRAPER =====================
 def scrape_aston_live():
     base_path = os.path.dirname(os.path.abspath(__file__))
     base_url = "https://www.astonbarclay.net/my-account/live"
@@ -150,93 +157,150 @@ def scrape_aston_live():
     return json_file
 
 
-# ===================== FILTER FUNCTION =====================
-def filter_aston_json(date_iso, input_file):
-    """
-    Filters Aston Barclay auctions by a given ISO date (YYYY-MM-DD) and returns the filtered list.
-    """
-    target_date = date_iso.split("T")[0]  # Example: "2025-11-01"
+
+def filter_aston_json_only_date(date_iso, input_file):
+    target_date = date_iso.split("T")[0] 
 
     with open(input_file, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     filtered = []
-
     for item in data:
-        date_str = item.get("Date", "N/A")
-        if date_str == "N/A":
+        date_str = item.get("Date", "")
+
+
+        if not date_str or date_str == "N/A":
             continue
+
         try:
+    
             dt = datetime.strptime(date_str.split(",")[0], "%A %d %B %Y")
             formatted = dt.strftime("%Y-%m-%d")
+
             if formatted == target_date:
                 filtered.append(item)
         except:
-            continue
+            continue  
 
     print(f"✅ Filtered {len(filtered)} auctions for {target_date}")
+
+
+    with open(input_file, "w", encoding="utf-8") as f:
+        json.dump(filtered, f, indent=4, ensure_ascii=False)
+
     return filtered
 
 
-# ===================== GOOGLE SHEETS UPLOAD =====================
-def upload_to_google_sheets(data, sheet_id):
-    base_path = os.path.dirname(os.path.abspath(__file__))
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-
-    creds_path = os.path.join(base_path, "bcacouk-6f0e8afe257b.json")
-    if not os.path.exists(creds_path):
-        print("❌ Google credentials file not found!")
-        return
-
-    creds = Credentials.from_service_account_file(creds_path, scopes=scopes)
-    client = gspread.authorize(creds)
+def login_and_get_token():
+    url = f"{API_BASE_URL}/api/auth/login"
+    payload = {
+        "email": LOGIN_EMAIL,
+        "password": LOGIN_PASSWORD
+    }
 
     try:
-        sheet = client.open_by_key(sheet_id).sheet1
-        print("✅ Connected to Google Sheet successfully!")
-    except Exception as e:
-        print("❌ Failed to open Google Sheet:", e)
-        return
+        r = requests.post(url, json=payload, verify=False, timeout=30)
+        r.raise_for_status()
+        token = r.json().get("data").get("token")
 
-    for sale in data:
-        title = sale.get("Title", "")
-        date_raw = sale.get("Date", "")
-        lots = sale.get("Vehicles", "")
+        if not token:
+            raise Exception("Token missing in response")
+
+        print("✅ Login successful")
+        return token
+
+    except Exception as e:
+        print("❌ Login failed:", e)
+        exit()
+
+def get_id(token):
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json"
+    }
+
+    try:
+        r = requests.get(API_ENDPOINT_PLATEFROM, headers=headers, verify=False, timeout=30)
+        r.raise_for_status()
+        platforms = r.json().get("data", [])
+        
+        for platform in platforms:
+            if platform.get("name") == "Aston Barclay":
+                return platform.get("id")
+        
+        return None  
+    except requests.RequestException as e:
+        print("Error fetching platforms:", e)
+        return None
+
+def upload_auctiondata_one_by_one(token ,payload):
+ 
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    try:
+        r = requests.post(
+            AUCTION_UPLOAD_URL,
+            json=payload,
+            headers=headers,
+            verify=False,
+            timeout=60
+        )
+
+        print("Status:", r.status_code)
 
         try:
-            dt = datetime.strptime(date_raw, "%A %d %B %Y, %H:%M")
-            sale_date = dt.strftime("%d/%m/%Y")
-            sale_time = dt.strftime("%H:%M:%S")
+            print("Response:", r.json())
         except Exception:
-            sale_date, sale_time = date_raw, ""
+            print("Response text:", r.text)
 
-        sheet.append_row([
-            "", "", "Aston Barclay",
-            title,
-            sale_date,
-            sale_time,
-            "",
-            lots,
-            "", "", "", "", "", ""
-        ])
+    except Exception as e:
+        print("❌ Failed:", e)
 
-    print(f"✅ Uploaded {len(data)} auctions to Google Sheet!")
-
-
-# ===================== MAIN EXECUTION =====================
+    time.sleep(1)  
+    
+    
+        
 if __name__ == "__main__":
     base_path = os.path.dirname(os.path.abspath(__file__))
-
+    
     if len(sys.argv) < 2:
         print("❌ Please provide date as argument!")
         sys.exit(1)
 
     selected_date = sys.argv[1]
-    print(f"🗓️ Selected Date: {selected_date}")
+
 
     json_file = scrape_aston_live()
     if json_file:
-        filtered_data = filter_aston_json(selected_date, json_file)
-        sheet_id = "1SigyZCALbmwjFkMv_LKk4q2ku2ej1Z6-J_n5QBX7qEs"
-        upload_to_google_sheets(filtered_data, sheet_id)
-        print("✅ Task completed successfully!")
+        file_path = os.path.join(base_path, "Aston_Live_Data", "aston_live.json")
+        filter_aston_json_only_date(selected_date,file_path)
+        token = login_and_get_token()
+        if token:
+            platefromID = get_id(token)
+        
+            if platefromID:
+                with open(file_path, "r", encoding="utf-8") as f:
+                        auctions = json.load(f)
+
+                for i, item in enumerate(auctions, start=1):
+                    iso_date_str = item.get("Date", "")
+                    if iso_date_str and iso_date_str != "N/A":
+                        dt = datetime.strptime(iso_date_str, "%A %d %B %Y, %H:%M")
+                        formatted_date = dt.strftime("%Y-%m-%d %H:%M:%S")
+
+                    payload = {
+                        "auction_type": 2,
+                        "platform": platefromID,
+                        "auction_name": item.get("Title"),
+                        "date": formatted_date,
+                        "lots": str(item.get("Vehicles")),
+                        "assign_to": "Shakeeb",
+                        "status":"Pending"  
+                    }
+
+                    res = upload_auctiondata_one_by_one(token,payload)
+        
