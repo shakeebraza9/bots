@@ -213,7 +213,7 @@ if __name__ == "__main__":
                 "auction_name": item.get("Sale Name"),
                 "date": formatted_date,
                 "lots": str(item.get("Lots Available")),
-                "assign_to": "Shakeeb",
+                "assign_to": "Mustafa",
                 "status":"Pending"  
             }
             res = upload_auctiondata_one_by_one(Token,payload)

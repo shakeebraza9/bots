@@ -12,7 +12,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 import re,urllib3,requests
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
+from functions.Function import Function as fn
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -20,12 +20,7 @@ FOLDER_NAME = "Manheim"
 FOLDER_PATH = os.path.join(BASE_DIR, FOLDER_NAME)
 
 
-load_dotenv()
-API_BASE_URL = os.getenv("API_BASE_URL")
-LOGIN_EMAIL = os.getenv("LOGIN_EMAIL")
-LOGIN_PASSWORD = os.getenv("LOGIN_PASSWORD")
-API_ENDPOINT_PLATEFROM = f"{API_BASE_URL}/api/cruds/platform"
-AUCTION_UPLOAD_URL = f"{API_BASE_URL}/api/cruds/taskManagement"
+
 
 
 os.makedirs(FOLDER_PATH, exist_ok=True)
@@ -226,77 +221,6 @@ def filter_auction_by_iso_date(target_date_iso):
     return filtered
 
 
-def login_and_get_token():
-    url = f"{API_BASE_URL}/api/auth/login"
-    payload = {
-        "email": LOGIN_EMAIL,
-        "password": LOGIN_PASSWORD
-    }
-
-    try:
-        r = requests.post(url, json=payload, verify=False, timeout=30)
-        r.raise_for_status()
-        token = r.json().get("data").get("token")
-
-        if not token:
-            raise Exception("Token missing in response")
-
-        print("✅ Login successful")
-        return token
-
-    except Exception as e:
-        print("❌ Login failed:", e)
-        exit()
-
-def get_id(token):
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json"
-    }
-
-    try:
-        r = requests.get(API_ENDPOINT_PLATEFROM, headers=headers, verify=False, timeout=30)
-        r.raise_for_status()
-        platforms = r.json().get("data", [])
-        
-        for platform in platforms:
-            if platform.get("name") == "Manheim Auction":
-                return platform.get("id")
-        
-        return None  
-    except requests.RequestException as e:
-        print("Error fetching platforms:", e)
-        return None
-
-def upload_auctiondata_one_by_one(token ,payload):
- 
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json",
-        "Content-Type": "application/json"
-    }
-    try:
-        r = requests.post(
-            AUCTION_UPLOAD_URL,
-            json=payload,
-            headers=headers,
-            verify=False,
-            timeout=60
-        )
-
-        print("Status:", r.status_code)
-
-        try:
-            print("Response:", r.json())
-        except Exception:
-            print("Response text:", r.text)
-
-    except Exception as e:
-        print("❌ Failed:", e)
-
-    time.sleep(1)  
-    
  
 
 
@@ -314,10 +238,11 @@ if __name__ == "__main__":
     filtered_data = filter_auction_by_iso_date(selected_date)
 
     if filtered_data:
-        token = login_and_get_token()
+        token = fn.login_and_get_token()
+        print(token)
         if token:
-            platefromID = get_id(token)
-        
+            platefromID = fn.get_id(token,"Manheim Auction")
+            print(platefromID)
             if platefromID:
                 base_path = os.path.dirname(os.path.abspath(__file__))
                 file_path = os.path.join(base_path, "Manheim", "finalList.json")
@@ -341,7 +266,7 @@ if __name__ == "__main__":
                         "auction_name": item.get("Auction name"),
                         "date": formatted_date,
                         "lots": str(item.get("Lots")),
-                        "assign_to": "Shakeeb",
+                        "assign_to": "Mustafa",
                         "status":"Pending"  
                     }
-                    res = upload_auctiondata_one_by_one(token,payload)
+                    res = fn.upload_auctiondata_one_by_one(token,payload)
